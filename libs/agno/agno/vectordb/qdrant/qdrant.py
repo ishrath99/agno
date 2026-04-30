@@ -77,6 +77,10 @@ class Qdrant(VectorDb):
             sparse_vector_name (str): Sparse vector name.
             hybrid_fusion_strategy (models.Fusion): Strategy for hybrid fusion.
             fastembed_kwargs (Optional[dict]): Keyword args for `fastembed.SparseTextEmbedding.__init__()`.
+                For offline/air-gapped environments, use:
+                - `local_files_only=True`: Prevents downloading models from the internet
+                - `cache_dir="/path/to/models"`: Specifies custom model cache location
+                Example for offline mode: `{"local_files_only": True, "cache_dir": "/app/models"}`
             **kwargs: Keyword args for `qdrant_client.QdrantClient.__init__()`.
         """
         # Validate required parameters
@@ -102,7 +106,7 @@ class Qdrant(VectorDb):
             from agno.knowledge.embedder.openai import OpenAIEmbedder
 
             embedder = OpenAIEmbedder()
-            log_info("Embedder not provided, using OpenAIEmbedder as default.")
+            log_debug("Embedder not provided, using OpenAIEmbedder as default.")
 
         self.embedder: Embedder = embedder
         self.dimensions: Optional[int] = self.embedder.dimensions
@@ -405,7 +409,7 @@ class Qdrant(VectorDb):
                                 doc.embedding = embeddings[j]
                                 doc.usage = usages[j] if j < len(usages) else None
                         except Exception as e:
-                            log_error(f"Error assigning batch embedding to document '{doc.name}': {e}")
+                            log_error(f"Error assigning batch embedding to document '{doc.name}': {str(e)}")
 
                 except Exception as e:
                     # Check if this is a rate limit error - don't fall back as it would make things worse
@@ -416,19 +420,22 @@ class Qdrant(VectorDb):
                     )
 
                     if is_rate_limit:
-                        log_error(f"Rate limit detected during batch embedding. {e}")
+                        log_error(f"Rate limit detected during batch embedding.: {str(e)}")
                         raise e
                     else:
-                        log_warning(f"Async batch embedding failed, falling back to individual embeddings: {e}")
+                        log_warning(
+                            f"Async batch embedding failed, falling back to individual embeddings: {e}",
+                        )
+
                         # Fall back to individual embedding
                         for doc in documents:
                             if self.search_type in [SearchType.vector, SearchType.hybrid]:
-                                doc.embed(embedder=self.embedder)
+                                await doc.async_embed(embedder=self.embedder)
             else:
                 # Use individual embedding
                 for doc in documents:
                     if self.search_type in [SearchType.vector, SearchType.hybrid]:
-                        doc.embed(embedder=self.embedder)
+                        await doc.async_embed(embedder=self.embedder)
 
         async def process_document(document):
             cleaned_content = document.content.replace("\x00", "\ufffd")
@@ -634,7 +641,7 @@ class Qdrant(VectorDb):
         limit: int,
         formatted_filters: Optional[models.Filter],
     ) -> List[models.ScoredPoint]:
-        dense_embedding = self.embedder.get_embedding(query)
+        dense_embedding = await self.embedder.async_get_embedding(query)
 
         # TODO(v2.0.0): Remove this conditional and always use named vectors
         if self.use_named_vectors:
@@ -683,7 +690,7 @@ class Qdrant(VectorDb):
         limit: int,
         formatted_filters: Optional[models.Filter],
     ) -> List[models.ScoredPoint]:
-        dense_embedding = self.embedder.get_embedding(query)
+        dense_embedding = await self.embedder.async_get_embedding(query)
         sparse_embedding = next(iter(self.sparse_encoder.embed([query]))).as_object()
         call = await self.async_client.query_points(
             collection_name=self.collection,
@@ -849,7 +856,7 @@ class Qdrant(VectorDb):
                 return False
 
         except Exception as e:
-            log_warning(f"Error deleting points with name {name}: {e}")
+            log_warning(f"Error deleting points with name {name}: {str(e)}")
             return False
 
     def delete_by_metadata(self, metadata: Dict[str, Any]) -> bool:
@@ -893,7 +900,7 @@ class Qdrant(VectorDb):
                 return False
 
         except Exception as e:
-            log_warning(f"Error deleting points with metadata {metadata}: {e}")
+            log_warning(f"Error deleting points with metadata {metadata}: {str(e)}")
             return False
 
     def delete_by_content_id(self, content_id: str) -> bool:
@@ -931,7 +938,7 @@ class Qdrant(VectorDb):
                 return False
 
         except Exception as e:
-            log_warning(f"Error deleting points with content_id {content_id}: {e}")
+            log_warning(f"Error deleting points with content_id {content_id}: {str(e)}")
             return False
 
     def id_exists(self, id: str) -> bool:
@@ -1016,7 +1023,7 @@ class Qdrant(VectorDb):
                 return False
 
         except Exception as e:
-            log_warning(f"Error deleting points with content_hash {content_hash}: {e}")
+            log_warning(f"Error deleting points with content_hash {content_hash}: {str(e)}")
             return False
 
     def update_metadata(self, content_id: str, metadata: Dict[str, Any]) -> None:
@@ -1081,7 +1088,7 @@ class Qdrant(VectorDb):
             log_debug(f"Updated metadata for {len(update_operations)} documents with content_id: {content_id}")
 
         except Exception as e:
-            log_error(f"Error updating metadata for content_id '{content_id}': {e}")
+            log_error(f"Error updating metadata for content_id '{content_id}': {str(e)}")
             raise
 
     def close(self) -> None:

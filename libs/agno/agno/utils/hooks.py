@@ -1,9 +1,7 @@
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
-if TYPE_CHECKING:
-    from agno.eval.base import BaseEval
-
+from agno.eval.base import BaseEval
 from agno.guardrails.base import BaseGuardrail
 from agno.hooks.decorator import HOOK_RUN_IN_BACKGROUND_ATTR
 from agno.utils.log import log_warning
@@ -32,9 +30,9 @@ def copy_args_for_background(args: Dict[str, Any]) -> Dict[str, Any]:
         if key in BACKGROUND_HOOK_COPY_KEYS and value is not None:
             try:
                 copied_args[key] = deepcopy(value)
-            except Exception:
+            except Exception as e:
                 # If deepcopy fails (e.g., for non-copyable objects), use the original
-                log_warning(f"Could not deepcopy {key} for background hook, using original reference")
+                log_warning(f"Could not deepcopy {key} for background hook, using original reference: {str(e)}")
                 copied_args[key] = value
         else:
             copied_args[key] = value
@@ -56,8 +54,21 @@ def should_run_hook_in_background(hook: Callable[..., Any]) -> bool:
     return getattr(hook, HOOK_RUN_IN_BACKGROUND_ATTR, False)
 
 
+def is_guardrail_hook(hook: Callable[..., Any]) -> bool:
+    """Check if a hook was derived from a BaseGuardrail instance.
+
+    Guardrails are converted to bound methods (.check/.async_check) by normalize_pre_hooks().
+    They must always run synchronously so InputCheckError/OutputCheckError can propagate.
+    """
+    # TODO: Replace __self__ introspection with a NormalizedHook(fn, kind) wrapper
+    # so classification happens once at normalization time, not at execution time.
+    # The current approach works because normalize_pre_hooks() always produces bound
+    # methods, but would break if hooks are wrapped with decorators or functools.partial.
+    return hasattr(hook, "__self__") and isinstance(hook.__self__, BaseGuardrail)
+
+
 def normalize_pre_hooks(
-    hooks: Optional[List[Union[Callable[..., Any], BaseGuardrail, "BaseEval"]]],
+    hooks: Optional[List[Union[Callable[..., Any], BaseGuardrail, BaseEval]]],
     async_mode: bool = False,
 ) -> Optional[List[Callable[..., Any]]]:
     """Normalize pre-hooks to a list format.
@@ -66,8 +77,6 @@ def normalize_pre_hooks(
         hooks: List of hook functions, guardrails, or eval instances
         async_mode: Whether to use async versions of methods
     """
-    from agno.eval.base import BaseEval
-
     result_hooks: List[Callable[..., Any]] = []
 
     if hooks is not None:
@@ -102,7 +111,7 @@ def normalize_pre_hooks(
 
 
 def normalize_post_hooks(
-    hooks: Optional[List[Union[Callable[..., Any], BaseGuardrail, "BaseEval"]]],
+    hooks: Optional[List[Union[Callable[..., Any], BaseGuardrail, BaseEval]]],
     async_mode: bool = False,
 ) -> Optional[List[Callable[..., Any]]]:
     """Normalize post-hooks to a list format.
@@ -111,8 +120,6 @@ def normalize_post_hooks(
         hooks: List of hook functions, guardrails, or eval instances
         async_mode: Whether to use async versions of methods
     """
-    from agno.eval.base import BaseEval
-
     result_hooks: List[Callable[..., Any]] = []
 
     if hooks is not None:
@@ -166,6 +173,6 @@ def filter_hook_args(hook: Callable[..., Any], all_args: Dict[str, Any]) -> Dict
         return filtered_args
 
     except Exception as e:
-        log_warning(f"Could not inspect hook signature, passing all arguments: {e}")
+        log_warning(f"Could not inspect hook signature, passing all arguments: {str(e)}")
         # If signature inspection fails, pass all arguments as fallback
         return all_args
